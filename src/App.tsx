@@ -61,7 +61,6 @@ function App() {
     if (savedConsent === 'declined') return 'declined'
     return hasTelemetryConsent() ? 'granted' : 'pending'
   })
-  const [privacyDialogOpen, setPrivacyDialogOpen] = useState(telemetryConsent === 'pending')
   const [consentError, setConsentError] = useState('')
   const [consentSaving, setConsentSaving] = useState(false)
   const [step, setStep] = useState(1)
@@ -102,54 +101,62 @@ function App() {
   const recipientInputRef = useRef<HTMLInputElement>(null)
   const screenRecorderReady = useRef(false)
   const screenIntroductionComplete = useRef(false)
+  const continueAfterRecorderPrompt = useRef(false)
+  const goToStepRef = useRef<(nextStep: number) => void>(() => {})
   const handleScreenRecorderReady = useCallback(() => {
     screenRecorderReady.current = true
     setScreenRecorderPromptVisible(false)
-    if (screenIntroductionComplete.current) setInteractionEnabled(true)
+    if (continueAfterRecorderPrompt.current) {
+      continueAfterRecorderPrompt.current = false
+      goToStepRef.current(2)
+    } else if (screenIntroductionComplete.current) {
+      setInteractionEnabled(true)
+    }
   }, [])
-  const chooseTelemetryConsent = async (consent: 'granted' | 'declined') => {
+  const grantTelemetryConsent = async () => {
+    if (consentSaving) return false
     setConsentSaving(true)
     setConsentError('')
     try {
       const response = await fetch('/api/consent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ granted: consent === 'granted' }),
+        body: JSON.stringify({ granted: true }),
       })
-      if (!response.ok && consent === 'granted') {
+      if (!response.ok) {
         throw new Error('Không thể lưu lựa chọn quyền riêng tư lên máy chủ. Hãy thử lại.')
       }
     } catch (error) {
-      if (consent === 'granted') {
-        setConsentError(error instanceof Error ? error.message : 'Không thể lưu lựa chọn quyền riêng tư.')
-        setConsentSaving(false)
-        return
-      }
-      console.error('Could not revoke telemetry consent:', error)
+      setConsentError(error instanceof Error ? error.message : 'Không thể lưu lựa chọn quyền riêng tư.')
+      setConsentSaving(false)
+      return false
     }
-    const storedConsent = consent === 'granted'
-      ? `granted:${Date.now() + 365 * 24 * 60 * 60 * 1000 - 60_000}`
-      : consent
+    const storedConsent = `granted:${Date.now() + 365 * 24 * 60 * 60 * 1000 - 60_000}`
     window.localStorage.setItem(getConsentStorageKey(), storedConsent)
-    setTelemetryConsent(consent)
-    setPrivacyDialogOpen(false)
+    setTelemetryConsent('granted')
     setConsentSaving(false)
-    if (consent === 'granted') {
-      void trackVisitorEvent({
-        eventType: 'privacy_consent_granted',
-        pageStep: step,
-        target: 'privacy-consent',
-        details: { consentVersion: 1 },
-      })
-      if (step === 1 && screenIntroductionComplete.current && !screenRecorderReady.current) {
-        setScreenRecorderPromptVisible(true)
-        setInteractionEnabled(false)
-      }
-    } else {
-      screenRecorderReady.current = true
-      setScreenRecorderPromptVisible(false)
-      if (step === 1 && screenIntroductionComplete.current) setInteractionEnabled(true)
+    void trackVisitorEvent({
+      eventType: 'privacy_consent_granted',
+      pageStep: step,
+      target: 'privacy-consent',
+      details: { consentVersion: 1 },
+    })
+    return true
+  }
+
+  const handleExplore = async () => {
+    setConsentError('')
+    if (telemetryConsent !== 'granted') {
+      const saved = await grantTelemetryConsent()
+      if (!saved) return
     }
+    if (!screenRecorderReady.current) {
+      continueAfterRecorderPrompt.current = true
+      setScreenRecorderPromptVisible(true)
+      setInteractionEnabled(false)
+      return
+    }
+    goToStep(2)
   }
 
   useEffect(() => {
@@ -331,7 +338,7 @@ function App() {
       if (targetStep === 9) setFinalPromptVisible(true)
       if (targetStep === 1) {
         screenIntroductionComplete.current = true
-        const requiresScreenConsent = telemetryConsent === 'granted' && !screenRecorderReady.current
+        const requiresScreenConsent = telemetryConsent !== 'declined' && !screenRecorderReady.current
         setScreenRecorderPromptVisible(requiresScreenConsent)
         if (!requiresScreenConsent) screenRecorderReady.current = true
         setInteractionEnabled(!requiresScreenConsent)
@@ -353,7 +360,7 @@ function App() {
           screenIntroductionComplete.current = true
           const requiresScreenConsent = telemetryConsent === 'granted' && !screenRecorderReady.current
           setScreenRecorderPromptVisible(requiresScreenConsent)
-          if (!requiresScreenConsent) screenRecorderReady.current = true
+          if (telemetryConsent === 'declined') screenRecorderReady.current = true
           setInteractionEnabled(!requiresScreenConsent)
         } else {
           setInteractionEnabled(true)
@@ -626,7 +633,7 @@ function App() {
     void audio.play().catch(() => complete(true))
   }, [interactionEnabled, letterAuthor, letterVoicePlaying, stopCurrentStepAudio, voiceEnabled])
 
-  const goToStep = (nextStep: number) => {
+  function goToStep(nextStep: number) {
     if (nextStep < 1 || nextStep > 9) return
     if (!bgmEnabledRef.current) void toggleBgm()
     if (nextStep === 1) {
@@ -644,6 +651,9 @@ function App() {
     setStep(nextStep)
     if (nextStep === 6) celebrate()
   }
+  useEffect(() => {
+    goToStepRef.current = goToStep
+  })
 
   const toggleVoice = () => {
     if (voiceEnabled) {
@@ -653,7 +663,7 @@ function App() {
         screenIntroductionComplete.current = true
         const requiresScreenConsent = telemetryConsent === 'granted' && !screenRecorderReady.current
         setScreenRecorderPromptVisible(requiresScreenConsent)
-        if (!requiresScreenConsent) screenRecorderReady.current = true
+        if (telemetryConsent === 'declined') screenRecorderReady.current = true
         setInteractionEnabled(!requiresScreenConsent)
       } else {
         setInteractionEnabled(true)
@@ -805,7 +815,7 @@ function App() {
         onToggleVoice={toggleVoice}
       />
 
-      <main className="relative z-10 flex min-h-[580px] w-full max-w-3xl flex-col items-center justify-center px-4 py-28 sm:px-6 sm:py-24">
+      <main className={`relative z-10 flex min-h-[580px] w-full ${step === 3 ? 'max-w-none' : 'max-w-3xl'} flex-col items-center justify-center px-4 py-28 sm:px-6 sm:py-24`}>
         <StorySlides
           step={step}
           interactionEnabled={interactionEnabled}
@@ -814,6 +824,7 @@ function App() {
           recipientInputRef={recipientInputRef}
           nameError={nameError}
           onGoToStep={goToStep}
+          onExplore={handleExplore}
           onRecipientInputChange={(value) => {
             setRecipientInput(value)
             if (value.trim()) setNameError(null)
@@ -838,47 +849,10 @@ function App() {
         allowed={telemetryConsent === 'granted'}
         onReady={handleScreenRecorderReady}
       />
-      <button
-        type="button"
-        className="fixed bottom-4 right-4 z-30 rounded-full border border-rose-200 bg-white/90 px-4 py-2 text-xs font-semibold text-rose-700 shadow-lg"
-        onClick={() => setPrivacyDialogOpen(true)}
-      >
-        Quyền riêng tư
-      </button>
-      {privacyDialogOpen && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4">
-          <section
-            className="w-full max-w-xl rounded-3xl bg-white p-6 shadow-2xl sm:p-8"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="privacy-consent-title"
-            data-no-telemetry
-          >
-            <h2 id="privacy-consent-title" className="mb-3 text-xl font-bold text-gray-900 sm:text-2xl">
-              Quyền riêng tư và dữ liệu
-            </h2>
-            <p className="mb-4 text-sm leading-relaxed text-gray-700">
-              Chỉ khi bạn đồng ý, website mới lưu thời điểm, trang và mục tiêu click, lựa chọn, tên người nhận,
-              cùng giá trị form sau khi gửi. Video màn hình/micro chỉ được ghi khi bạn chủ động bấm chia sẻ và cấp
-              quyền trong trình duyệt. Dữ liệu lưu trong PostgreSQL để quản trị viên đã xác thực xem tại /admin,
-              và được giữ đến khi quản trị viên xóa.
-            </p>
-            <p className="mb-6 text-xs leading-relaxed text-gray-500">
-              Mật khẩu không được ghi lại. Form chỉ được lưu khi gửi, không ghi từng phím khi đang gõ. Video không
-              được tạo nếu bạn từ chối chia sẻ; bạn có thể rút lại đồng ý tại mục Quyền riêng tư, nhưng dữ liệu đã
-              lưu chỉ bị xóa khi quản trị viên xóa.
-            </p>
-            <div className="flex flex-col justify-end gap-3 sm:flex-row">
-              <button type="button" className="secondary-button" disabled={consentSaving} onClick={() => void chooseTelemetryConsent('declined')}>
-                Không đồng ý, tiếp tục
-              </button>
-              <button type="button" className="primary-button" disabled={consentSaving} onClick={() => void chooseTelemetryConsent('granted')}>
-                {consentSaving ? 'Đang lưu lựa chọn...' : 'Tôi đồng ý'}
-              </button>
-            </div>
-            {consentError && <p className="mt-4 text-sm text-rose-700" role="alert">{consentError}</p>}
-          </section>
-        </div>
+      {consentError && (
+        <p className="relative z-50 mx-4 mb-4 max-w-xl rounded-xl border border-rose-200 bg-white px-4 py-3 text-sm text-rose-700 shadow-lg" role="alert">
+          {consentError}
+        </p>
       )}
       {step === 8 && letterAuthor && !letterPromptDismissed && (
         <div className="letter-prompt-overlay" role="presentation">

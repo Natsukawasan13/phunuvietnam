@@ -233,13 +233,17 @@ function ScreenRecorder({ visible, allowed, onReady }: ScreenRecorderProps) {
         </h2>
         <p id="screen-recorder-description" className="mb-5 text-sm leading-relaxed text-gray-600">
           Nhấn nút để mở hộp thoại chia sẻ của trình duyệt. Chọn màn hình hoặc tab muốn ghi và cho phép dùng micro.
-          Bản ghi sẽ được tải về máy và lưu trong PostgreSQL để quản trị viên đã xác thực xem lại.
+          Bản ghi video sẽ được tải về máy của bạn.
         </p>
+        {/* <p className="mb-5 rounded-xl bg-rose-50 px-4 py-3 text-left text-xs leading-relaxed text-gray-700">
+          Quyền riêng tư và dữ liệu đã được hỏi ở nút <strong>Khám phá ngay</strong>. Chia sẻ màn hình và micro vẫn
+          cần bạn cấp quyền riêng trong trình duyệt; đóng cửa sổ này nếu không muốn chia sẻ.
+        </p> */}
         {!recording ? (
           <button
             type="button"
             className="primary-button w-full"
-            disabled={saving || !allowed}
+            disabled={saving}
             onClick={() => void startRecording()}
           >
             <ScreenShare className="h-4 w-4" aria-hidden="true" />
@@ -249,7 +253,7 @@ function ScreenRecorder({ visible, allowed, onReady }: ScreenRecorderProps) {
           <div className="flex flex-col items-center gap-4">
             <p className="flex items-center gap-2 text-sm font-medium text-rose-700" role="status">
               <Mic className="h-4 w-4" aria-hidden="true" />
-              Đang ghi màn hình và micro
+              Đang ghi màn hình (sau khi bạn dừng thì video sẽ tự động tải về máy của bạn)
             </p>
             <button type="button" className="secondary-button" onClick={stopRecording}>
               <Square className="h-4 w-4 fill-current" aria-hidden="true" />

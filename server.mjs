@@ -370,14 +370,16 @@ const listEvents = async (request, response, requestUrl) => {
   const limit = Math.min(Math.max(Number(requestUrl.searchParams.get('limit') ?? 50), 1), 100)
   const offset = Math.max(Number(requestUrl.searchParams.get('offset') ?? 0), 0)
   const search = (requestUrl.searchParams.get('search') ?? '').trim().slice(0, 100)
+  const sessionId = (requestUrl.searchParams.get('sessionId') ?? '').trim().slice(0, 36)
   const result = await appPool.query(
     `SELECT id, session_id, occurred_at, page_step, event_type, target, details
      FROM public.visitor_events
-     WHERE $3 = '' OR details::text ILIKE '%' || $3 || '%'
+     WHERE ($3 = '' OR details::text ILIKE '%' || $3 || '%'
        OR COALESCE(target, '') ILIKE '%' || $3 || '%'
-       OR event_type ILIKE '%' || $3 || '%'
+       OR event_type ILIKE '%' || $3 || '%')
+       AND ($4 = '' OR session_id::text ILIKE '%' || $4 || '%')
      ORDER BY occurred_at DESC LIMIT $1 OFFSET $2`,
-    [limit, offset, search],
+    [limit, offset, search, sessionId],
   )
   sendJson(response, 200, { events: result.rows })
 }
@@ -385,14 +387,16 @@ const listEvents = async (request, response, requestUrl) => {
 const exportEvents = async (request, response, requestUrl) => {
   if (!requireAdmin(request, response)) return
   const search = (requestUrl.searchParams.get('search') ?? '').trim().slice(0, 100)
+  const sessionId = (requestUrl.searchParams.get('sessionId') ?? '').trim().slice(0, 36)
   const result = await appPool.query(
     `SELECT id, session_id, occurred_at, page_step, event_type, target, details
      FROM public.visitor_events
-     WHERE $1 = '' OR details::text ILIKE '%' || $1 || '%'
+     WHERE ($1 = '' OR details::text ILIKE '%' || $1 || '%'
        OR COALESCE(target, '') ILIKE '%' || $1 || '%'
-       OR event_type ILIKE '%' || $1 || '%'
+       OR event_type ILIKE '%' || $1 || '%')
+       AND ($2 = '' OR session_id::text ILIKE '%' || $2 || '%')
      ORDER BY occurred_at DESC`,
-    [search],
+    [search, sessionId],
   )
   const workbook = new ExcelJS.Workbook()
   workbook.creator = 'PhunuVietnam Admin'

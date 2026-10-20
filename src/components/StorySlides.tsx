@@ -3,6 +3,13 @@ import longAvatar from '../assets/avatar/long.jpg'
 import tuanAvatar from '../assets/avatar/tuan.jpg'
 import longVideoUrl from '../assets/video/x1.mp4?url'
 import tuanVideoUrl from '../assets/video/x2.mp4?url'
+import ReactionPanel from './ReactionPanel'
+import {
+  createMockReactionState,
+  type ReactionKind,
+  type ReactionState,
+  type ReactionThread,
+} from './reactionData'
 import {
   AlertCircle,
   ArrowLeft,
@@ -31,6 +38,7 @@ type StorySlidesProps = {
   recipientInputRef: RefObject<HTMLInputElement | null>
   nameError: 'required' | 'not-listed' | null
   onGoToStep: (step: number) => void
+  onExplore: () => void
   onRecipientInputChange: (value: string) => void
   onConfirmRecipient: () => void
   onOpenGift: () => void
@@ -177,6 +185,7 @@ function StorySlides({
   recipientInputRef,
   nameError,
   onGoToStep,
+  onExplore,
   onRecipientInputChange,
   onConfirmRecipient,
   onOpenGift,
@@ -190,8 +199,35 @@ function StorySlides({
 }: StorySlidesProps) {
   const [selectedFounder, setSelectedFounder] = useState<'Long' | 'Tuấn' | null>(null)
   const [videoOpen, setVideoOpen] = useState(false)
+  const [reactionThreads, setReactionThreads] = useState<Record<ReactionThread, ReactionState>>(() => ({
+    'avatar-Long': createMockReactionState('avatar-Long'),
+    'avatar-Tuấn': createMockReactionState('avatar-Tuấn'),
+    celebration: createMockReactionState('celebration'),
+    'letter-Long': createMockReactionState('letter-Long'),
+    'letter-Tuấn': createMockReactionState('letter-Tuấn'),
+  }))
   const closeVideo = useCallback(() => setVideoOpen(false), [])
   const selectedAvatar = selectedFounder === 'Long' ? longAvatar : tuanAvatar
+  const updateReactionThread = (thread: ReactionThread, update: (current: ReactionState) => ReactionState) => {
+    setReactionThreads((current) => ({
+      ...current,
+      [thread]: update(current[thread]),
+    }))
+  }
+  const renderReactionPanel = (thread: ReactionThread, title: string) => (
+    <ReactionPanel
+      title={title}
+      state={reactionThreads[thread]}
+      onReact={(kind: ReactionKind) => updateReactionThread(thread, (current) => ({
+        ...current,
+        counts: { ...current.counts, [kind]: current.counts[kind] + 1 },
+      }))}
+      onComment={(text) => updateReactionThread(thread, (current) => ({
+        ...current,
+        comments: [...current.comments, { author: 'Bạn', text }],
+      }))}
+    />
+  )
 
   switch (step) {
     case 1:
@@ -211,7 +247,7 @@ function StorySlides({
           </p>
           <PrimaryButton
             interactionEnabled={interactionEnabled}
-            onClick={() => onGoToStep(2)}
+            onClick={onExplore}
             icon={<Sparkles className="h-4 w-4 transition-transform group-hover:rotate-12" aria-hidden="true" />}
           >
             Khám phá ngay
@@ -257,7 +293,7 @@ function StorySlides({
       )
     case 3:
       return (
-        <div className="intro-stage">
+        <div className={`intro-stage${selectedFounder ? ' intro-stage--founder-selected' : ''}`}>
           <aside
             id="founder-avatars"
             className="founder-avatar-panel"
@@ -274,6 +310,7 @@ function StorySlides({
                   alt={`Avatar của ${selectedFounder}`}
                 />
                 <span className="founder-avatar__name">{selectedFounder}</span>
+                {renderReactionPanel(`avatar-${selectedFounder}`, `Cảm xúc về ${selectedFounder}`)}
                 <button
                   type="button"
                   className="avatar-replay-button"
@@ -498,6 +535,7 @@ function StorySlides({
               Đọc tâm thư cá nhân
             </PrimaryButton>
           </div>
+          {renderReactionPanel('celebration', 'Cảm xúc về lời chúc')}
         </Card>
       )
     case 7:
@@ -603,6 +641,7 @@ function StorySlides({
               Lời kết
             </PrimaryButton>
           </div>
+          {letterAuthor && renderReactionPanel(`letter-${letterAuthor}`, `Cảm xúc về tâm thư của ${letterAuthor}`)}
           {videoOpen && letterAuthor && (
             <LetterVideoModal author={letterAuthor} onClose={closeVideo} />
           )}

@@ -43,17 +43,19 @@ function AdminDashboard() {
   const [recordings, setRecordings] = useState<ScreenRecording[]>([])
   const [searchInput, setSearchInput] = useState('')
   const [activeSearch, setActiveSearch] = useState('')
+  const [sessionSearchInput, setSessionSearchInput] = useState('')
+  const [activeSessionSearch, setActiveSessionSearch] = useState('')
   const [hasMoreEvents, setHasMoreEvents] = useState(false)
   const [hasMoreRecordings, setHasMoreRecordings] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
 
-  const loadData = useCallback(async (search = '') => {
+  const loadData = useCallback(async (search = '', sessionId = '') => {
     setLoading(true)
     setError('')
     try {
-      const eventQuery = new URLSearchParams({ limit: '100', search })
+      const eventQuery = new URLSearchParams({ limit: '100', search, sessionId })
       const [eventResponse, recordingResponse] = await Promise.all([
         fetch(`/api/admin/events?${eventQuery}`, { credentials: 'same-origin' }),
         fetch('/api/admin/recordings?limit=100', { credentials: 'same-origin' }),
@@ -76,13 +78,16 @@ function AdminDashboard() {
     }
   }, [])
 
-  const loadMore = async (kind: 'events' | 'recordings', search = '') => {
+  const loadMore = async (kind: 'events' | 'recordings', search = '', sessionId = '') => {
     const offset = kind === 'events' ? events.length : recordings.length
     setLoading(true)
     setError('')
     try {
       const query = new URLSearchParams({ limit: '100', offset: String(offset) })
-      if (kind === 'events') query.set('search', search)
+      if (kind === 'events') {
+        query.set('search', search)
+        query.set('sessionId', sessionId)
+      }
       const response = await fetch(`/api/admin/${kind}?${query}`, { credentials: 'same-origin' })
       if (response.status === 401) {
         setAuthenticated(false)
@@ -145,7 +150,7 @@ function AdminDashboard() {
       })
       const result = await response.json() as ApiError
       if (!response.ok) throw new Error(result.error ?? 'Không thể xóa bản ghi.')
-      await loadData(activeSearch)
+      await loadData(activeSearch, activeSessionSearch)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Không thể xóa bản ghi.')
     }
@@ -163,7 +168,7 @@ function AdminDashboard() {
       })
       const result = await response.json() as ApiError & { deleted?: number }
       if (!response.ok) throw new Error(result.error ?? `Không thể xóa ${label}.`)
-      await loadData(activeSearch)
+      await loadData(activeSearch, activeSessionSearch)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : `Không thể xóa ${label}.`)
     } finally {
@@ -177,6 +182,7 @@ function AdminDashboard() {
     try {
       const query = new URLSearchParams()
       if (activeSearch) query.set('search', activeSearch)
+      if (activeSessionSearch) query.set('sessionId', activeSessionSearch)
       const response = await fetch(`/api/admin/events/export?${query}`, { credentials: 'same-origin' })
       if (!response.ok) {
         const result = await response.json() as ApiError
@@ -237,7 +243,7 @@ function AdminDashboard() {
                 <button type="button" disabled={exporting} onClick={() => void exportEvents()} className="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm text-emerald-800 disabled:opacity-60">
                   <FileSpreadsheet className="h-4 w-4" aria-hidden="true" /> {exporting ? 'Đang xuất...' : 'Tải log Excel'}
                 </button>
-                <button type="button" onClick={() => void loadData(activeSearch)} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+                <button type="button" onClick={() => void loadData(activeSearch, activeSessionSearch)} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
                   <RefreshCw className="h-4 w-4" aria-hidden="true" /> Làm mới
                 </button>
                 <button type="button" onClick={() => void logout()} className="inline-flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm text-white">
@@ -251,18 +257,21 @@ function AdminDashboard() {
                 <div>
                   <h2 className="text-lg font-bold">Lịch sử thao tác ({events.length})</h2>
                   {activeSearch && <p className="mt-1 text-xs text-slate-500">Đang lọc theo: “{activeSearch}”</p>}
+                  {activeSessionSearch && <p className="mt-1 text-xs text-slate-500">Phiên: “{activeSessionSearch}”</p>}
                 </div>
                 <button type="button" disabled={loading} onClick={() => void deleteAll('events')} className="inline-flex items-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60">
                   <Trash2 className="h-4 w-4" aria-hidden="true" /> Xóa tất cả log
                 </button>
               </div>
               <form
-                className="flex flex-col gap-2 border-b border-slate-200 p-4 sm:flex-row"
+                className="flex flex-col gap-2 border-b border-slate-200 p-4 sm:flex-row sm:flex-wrap"
                 onSubmit={(event) => {
                   event.preventDefault()
                   const search = searchInput.trim()
+                  const sessionId = sessionSearchInput.trim()
                   setActiveSearch(search)
-                  void loadData(search)
+                  setActiveSessionSearch(sessionId)
+                  void loadData(search, sessionId)
                 }}
               >
                 <label htmlFor="event-search" className="sr-only">Tìm log theo tên người dùng</label>
@@ -274,14 +283,25 @@ function AdminDashboard() {
                   placeholder="Tìm log theo tên người dùng đã nhập..."
                   className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-300"
                 />
+                <label htmlFor="session-search" className="sr-only">Tìm log theo phiên</label>
+                <input
+                  id="session-search"
+                  type="search"
+                  value={sessionSearchInput}
+                  onChange={(event) => setSessionSearchInput(event.target.value)}
+                  placeholder="Lọc theo Session ID..."
+                  className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-300"
+                />
                 <button type="submit" disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-800 px-4 py-2 text-sm font-medium text-white disabled:opacity-60">
                   <Search className="h-4 w-4" aria-hidden="true" /> Tìm kiếm
                 </button>
-                {activeSearch && (
+                {(activeSearch || activeSessionSearch) && (
                   <button type="button" disabled={loading} onClick={() => {
                     setSearchInput('')
+                    setSessionSearchInput('')
                     setActiveSearch('')
-                    void loadData('')
+                    setActiveSessionSearch('')
+                    void loadData('', '')
                   }} className="rounded-lg border border-slate-300 px-4 py-2 text-sm disabled:opacity-60">
                     Xóa lọc
                   </button>
@@ -313,7 +333,7 @@ function AdminDashboard() {
               </div>
               {hasMoreEvents && (
                 <div className="border-t border-slate-200 p-4 text-center">
-                  <button type="button" disabled={loading} onClick={() => void loadMore('events', activeSearch)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm disabled:opacity-60">
+                  <button type="button" disabled={loading} onClick={() => void loadMore('events', activeSearch, activeSessionSearch)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm disabled:opacity-60">
                     {loading ? 'Đang tải...' : 'Tải thêm sự kiện'}
                   </button>
                 </div>

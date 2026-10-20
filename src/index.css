@@ -497,18 +497,32 @@ input:focus-visible {
   width: min(calc(100% - 2rem), 47.5rem);
 }
 
+.intro-stage--founder-selected {
+  display: grid;
+  width: min(100%, calc(100vw - 2rem));
+  grid-template-columns: minmax(14rem, 18rem) minmax(0, 47.5rem);
+  align-items: center;
+  justify-content: center;
+  gap: clamp(1rem, 2vw, 2rem);
+  margin-inline: auto;
+}
+
+.intro-stage--founder-selected > .slide-step {
+  width: 100%;
+  min-width: 0;
+}
+
 .intro-quote {
   width: 100%;
 }
 
 .founder-avatar-panel {
-  position: absolute;
-  left: clamp(3rem, calc((100vw - 90rem) / 2), 4rem);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 0.65rem;
-  width: clamp(10rem, 20vw, 18rem);
+  width: 100%;
+  min-width: 0;
   animation: slide-in 250ms ease-out both;
 }
 
@@ -553,15 +567,28 @@ input:focus-visible {
   background: #ffe4e6;
 }
 
-@media (max-width: 1023px) {
+@media (max-width: 1199px) {
   .intro-stage {
     flex-direction: column;
   }
 
+  .intro-stage--founder-selected {
+    width: min(100%, calc(100vw - 2rem));
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+  }
+
+  .intro-stage--founder-selected > .slide-step {
+    width: min(100%, 47.5rem);
+  }
+
   .founder-avatar-panel {
     position: static;
-    width: min(12rem, 60vw);
-    margin-bottom: 1rem;
+    width: min(100%, 28rem);
+  }
+
+  .founder-avatar-photo {
+    max-height: min(42vh, 24rem);
   }
 }
 
