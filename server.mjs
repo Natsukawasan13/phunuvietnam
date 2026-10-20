@@ -5,6 +5,7 @@ import { createServer } from 'node:http'
 import { extname, join, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { fileURLToPath } from 'node:url'
+import ExcelJS from 'exceljs'
 import pg from 'pg'
 
 const { Pool } = pg
@@ -368,12 +369,67 @@ const listEvents = async (request, response, requestUrl) => {
   if (!requireAdmin(request, response)) return
   const limit = Math.min(Math.max(Number(requestUrl.searchParams.get('limit') ?? 50), 1), 100)
   const offset = Math.max(Number(requestUrl.searchParams.get('offset') ?? 0), 0)
+  const search = (requestUrl.searchParams.get('search') ?? '').trim().slice(0, 100)
   const result = await appPool.query(
     `SELECT id, session_id, occurred_at, page_step, event_type, target, details
-     FROM public.visitor_events ORDER BY occurred_at DESC LIMIT $1 OFFSET $2`,
-    [limit, offset],
+     FROM public.visitor_events
+     WHERE $3 = '' OR details::text ILIKE '%' || $3 || '%'
+       OR COALESCE(target, '') ILIKE '%' || $3 || '%'
+       OR event_type ILIKE '%' || $3 || '%'
+     ORDER BY occurred_at DESC LIMIT $1 OFFSET $2`,
+    [limit, offset, search],
   )
   sendJson(response, 200, { events: result.rows })
+}
+
+const exportEvents = async (request, response, requestUrl) => {
+  if (!requireAdmin(request, response)) return
+  const search = (requestUrl.searchParams.get('search') ?? '').trim().slice(0, 100)
+  const result = await appPool.query(
+    `SELECT id, session_id, occurred_at, page_step, event_type, target, details
+     FROM public.visitor_events
+     WHERE $1 = '' OR details::text ILIKE '%' || $1 || '%'
+       OR COALESCE(target, '') ILIKE '%' || $1 || '%'
+       OR event_type ILIKE '%' || $1 || '%'
+     ORDER BY occurred_at DESC`,
+    [search],
+  )
+  const workbook = new ExcelJS.Workbook()
+  workbook.creator = 'PhunuVietnam Admin'
+  workbook.created = new Date()
+  const worksheet = workbook.addWorksheet('Lịch sử thao tác')
+  worksheet.columns = [
+    { header: 'ID', key: 'id', width: 12 },
+    { header: 'Thời gian', key: 'occurredAt', width: 24 },
+    { header: 'Session ID', key: 'sessionId', width: 38 },
+    { header: 'Trang', key: 'pageStep', width: 12 },
+    { header: 'Hành động', key: 'eventType', width: 24 },
+    { header: 'Mục tiêu', key: 'target', width: 32 },
+    { header: 'Chi tiết', key: 'details', width: 80 },
+  ]
+  worksheet.getRow(1).font = { bold: true }
+  worksheet.views = [{ state: 'frozen', ySplit: 1 }]
+  for (const event of result.rows) {
+    worksheet.addRow({
+      id: event.id,
+      occurredAt: event.occurred_at,
+      sessionId: event.session_id,
+      pageStep: event.page_step,
+      eventType: event.event_type,
+      target: event.target,
+      details: JSON.stringify(event.details),
+    })
+  }
+  worksheet.autoFilter = { from: 'A1', to: 'G1' }
+  const file = Buffer.from(await workbook.xlsx.writeBuffer())
+  response.writeHead(200, {
+    'Cache-Control': 'no-store',
+    'Content-Disposition': 'attachment; filename="visitor-events.xlsx"',
+    'Content-Length': file.length,
+    'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'X-Content-Type-Options': 'nosniff',
+  })
+  response.end(file)
 }
 
 const listRecordings = async (request, response, requestUrl) => {
@@ -388,7 +444,7 @@ const listRecordings = async (request, response, requestUrl) => {
   sendJson(response, 200, { recordings: result.rows })
 }
 
-const streamRecording = async (request, response, recordingId) => {
+const streamRecording = async (request, response, recordingId, download = false) => {
   if (!requireAdmin(request, response)) return
   if (!/^[1-9]\d{0,17}$/.test(recordingId)) {
     sendJson(response, 400, { error: 'Invalid recording ID' })
@@ -437,7 +493,7 @@ const streamRecording = async (request, response, recordingId) => {
     const contentLength = end - start + 1
     response.writeHead(rangeMatch ? 206 : 200, {
       'Cache-Control': 'no-store',
-      'Content-Disposition': `inline; filename="${filename}"`,
+      'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="${filename}"`,
       'Content-Length': contentLength,
       'Content-Type': mimeType,
       'Accept-Ranges': 'bytes',
@@ -497,6 +553,34 @@ const deleteAdminRecord = async (request, response, kind, id) => {
     await client.query('ROLLBACK').catch(() => undefined)
     sendJson(response, 500, { error: 'Could not delete recording' })
     console.error('Could not delete recording:', error instanceof Error ? error.message : 'Unknown error')
+  } finally {
+    client.release()
+  }
+}
+
+const deleteAllAdminRecords = async (request, response, kind) => {
+  if (!requireAdmin(request, response)) return
+  const client = await appPool.connect()
+  try {
+    await client.query('BEGIN')
+    if (kind === 'events') {
+      const result = await client.query('DELETE FROM public.visitor_events')
+      await client.query('COMMIT')
+      sendJson(response, 200, { deleted: result.rowCount })
+      return
+    }
+    const recordings = await client.query(
+      'DELETE FROM public.screen_recordings RETURNING large_object_oid',
+    )
+    for (const recording of recordings.rows) {
+      await client.query('SELECT lo_unlink($1)', [recording.large_object_oid])
+    }
+    await client.query('COMMIT')
+    sendJson(response, 200, { deleted: recordings.rowCount })
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined)
+    sendJson(response, 500, { error: `Could not delete all ${kind}` })
+    console.error(`Could not delete all ${kind}:`, error instanceof Error ? error.message : 'Unknown error')
   } finally {
     client.release()
   }
@@ -655,13 +739,26 @@ const server = createServer(async (request, response) => {
       await listEvents(request, response, requestUrl)
       return
     }
+    if (requestUrl.pathname === '/api/admin/events/export' && request.method === 'GET') {
+      await exportEvents(request, response, requestUrl)
+      return
+    }
     if (requestUrl.pathname === '/api/admin/recordings' && request.method === 'GET') {
       await listRecordings(request, response, requestUrl)
       return
     }
     const recordingMatch = requestUrl.pathname.match(/^\/api\/admin\/recordings\/([1-9]\d{0,17})$/)
     if (recordingMatch && request.method === 'GET') {
-      await streamRecording(request, response, recordingMatch[1])
+      await streamRecording(request, response, recordingMatch[1], requestUrl.searchParams.get('download') === '1')
+      return
+    }
+    const collectionDeleteMatch = requestUrl.pathname.match(/^\/api\/admin\/(events|recordings)$/)
+    if (collectionDeleteMatch && request.method === 'DELETE') {
+      if (!hasSameOrigin(request)) {
+        sendJson(response, 403, { error: 'Same-origin request required' })
+        return
+      }
+      await deleteAllAdminRecords(request, response, collectionDeleteMatch[1])
       return
     }
     const deleteMatch = requestUrl.pathname.match(/^\/api\/admin\/(events|recordings)\/([1-9]\d{0,17})$/)
