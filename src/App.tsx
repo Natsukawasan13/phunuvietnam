@@ -974,6 +974,7 @@ function App() {
                   </label>
                   <input
                     id="birthday-date"
+                    name="birthdayDate"
                     className="w-full rounded-xl border border-rose-200 bg-white px-4 py-3 text-gray-800 shadow-inner focus:border-rose-500 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     type="date"
                     required
@@ -985,6 +986,7 @@ function App() {
                   </label>
                   <textarea
                     id="birthday-feedback"
+                    name="birthdayFeedback"
                     className="min-h-28 w-full resize-y rounded-xl border border-rose-200 bg-white px-4 py-3 text-gray-800 shadow-inner focus:border-rose-500 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     placeholder="Bạn cảm thấy thế nào về món quà này?"
                     value={birthdayFeedback}

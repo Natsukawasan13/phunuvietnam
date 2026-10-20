@@ -2,20 +2,32 @@
 
 React/TypeScript recreation of Google Stitch project `9241271036716160551`. The single Stitch screen contains a nine-step interactive greeting, recipient personalization, audio controls, falling petals, and celebration effects.
 
-## Run locally
+## Run locally (Docker, recommended)
+
+```sh
+cp .env.example .env
+```
+
+Edit `.env` and replace every `replace-with-...` value with a unique strong secret. For example, generate values with `openssl rand -hex 32`; use separate values for each password and `SESSION_SECRET`. Then build and start the app and PostgreSQL 18.4:
+
+```sh
+docker compose up --build -d
+docker compose ps
+docker compose logs -f web
+```
+
+Open <http://localhost:8080> for the site and <http://localhost:8080/admin> for the admin page. Stop it with `docker compose down`; this preserves the database volume. Do not use `docker compose down -v` unless you intend to permanently delete local data.
+
+## Run the Vite development server
+
+For hot reload, first start PostgreSQL 18.4 and the API using the Docker setup above. Then in another terminal run:
 
 ```sh
 npm install
-npm run build
-cp -n .env.example .env
-# Replace all placeholder secrets, then load the environment and start the API server:
-set -a; . ./.env; set +a
-npm start
-# In a second terminal, from the same project directory:
-npm run dev
+VITE_API_PROXY_TARGET=http://127.0.0.1:8080 npm run dev
 ```
 
-The local API expects PostgreSQL at `POSTGRES_HOST`/`POSTGRES_PORT` (default `127.0.0.1:5432`). Start a PostgreSQL 18.4 instance first, or use the Docker deployment below. Vite proxies `/api` to the Node API server on port `4173`.
+Open the local URL printed by Vite (usually <http://localhost:5173>). This proxies `/api` to the Docker app, so keep the Compose services running. If `WEB_PORT` in `.env` is not `8080`, change the target port to match it.
 
 ## Checks
 
@@ -26,7 +38,7 @@ npm run lint
 
 ## Docker deployment
 
-Create a private environment file from the template and replace every placeholder with a different strong secret (passwords can be generated with `openssl rand -hex 32`; keep `ADMIN_PASSWORD` at least 16 characters and `SESSION_SECRET` at least 32):
+For deployment, create a private environment file from the template and replace every placeholder with a different strong secret (passwords can be generated with `openssl rand -hex 32`; keep `ADMIN_PASSWORD` at least 16 characters and `SESSION_SECRET` at least 32):
 
 ```sh
 cp .env.example .env
