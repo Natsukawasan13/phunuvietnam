@@ -25,6 +25,7 @@ import ScreenRecorder from './components/ScreenRecorder'
 import StorySlides from './components/StorySlides'
 import { AudioControls } from './components/AudioControls'
 import { StepProgress } from './components/StepProgress'
+import { getConsentStorageKey, hasTelemetryConsent, trackVisitorEvent } from './services/telemetry'
 
 const allowedRecipients = ['Nhi', 'Nguyên', 'Nguyễn Thảo Nguyên', 'Thảo Nguyên', 'Đoan', 'Ngô Thục Đoan', 'Thục Đoan', 'Trang', 'Vy', 'Ngân', 'Hường', 'Hương', 'Khanh', 'Hạnh', 'Út Hạnh', 'Thư', 'My', 'Thu']
 const stepAudio: Record<number, { url: string; name: string; status: string }> = {
@@ -55,6 +56,14 @@ const getVoiceScript = (step: number, recipientName: string) => {
 }
 
 function App() {
+  const [telemetryConsent, setTelemetryConsent] = useState<'pending' | 'granted' | 'declined'>(() => {
+    const savedConsent = window.localStorage.getItem(getConsentStorageKey())
+    if (savedConsent === 'declined') return 'declined'
+    return hasTelemetryConsent() ? 'granted' : 'pending'
+  })
+  const [privacyDialogOpen, setPrivacyDialogOpen] = useState(telemetryConsent === 'pending')
+  const [consentError, setConsentError] = useState('')
+  const [consentSaving, setConsentSaving] = useState(false)
   const [step, setStep] = useState(1)
   const [recipientName, setRecipientName] = useState('')
   const [letterAuthor, setLetterAuthor] = useState<'Long' | 'Tuấn' | null>(null)
@@ -98,6 +107,129 @@ function App() {
     setScreenRecorderPromptVisible(false)
     if (screenIntroductionComplete.current) setInteractionEnabled(true)
   }, [])
+  const chooseTelemetryConsent = async (consent: 'granted' | 'declined') => {
+    setConsentSaving(true)
+    setConsentError('')
+    try {
+      const response = await fetch('/api/consent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ granted: consent === 'granted' }),
+      })
+      if (!response.ok && consent === 'granted') {
+        throw new Error('Không thể lưu lựa chọn quyền riêng tư lên máy chủ. Hãy thử lại.')
+      }
+    } catch (error) {
+      if (consent === 'granted') {
+        setConsentError(error instanceof Error ? error.message : 'Không thể lưu lựa chọn quyền riêng tư.')
+        setConsentSaving(false)
+        return
+      }
+      console.error('Could not revoke telemetry consent:', error)
+    }
+    const storedConsent = consent === 'granted'
+      ? `granted:${Date.now() + 365 * 24 * 60 * 60 * 1000 - 60_000}`
+      : consent
+    window.localStorage.setItem(getConsentStorageKey(), storedConsent)
+    setTelemetryConsent(consent)
+    setPrivacyDialogOpen(false)
+    setConsentSaving(false)
+    if (consent === 'granted') {
+      void trackVisitorEvent({
+        eventType: 'privacy_consent_granted',
+        pageStep: step,
+        target: 'privacy-consent',
+        details: { consentVersion: 1 },
+      })
+      if (step === 1 && screenIntroductionComplete.current && !screenRecorderReady.current) {
+        setScreenRecorderPromptVisible(true)
+        setInteractionEnabled(false)
+      }
+    } else {
+      screenRecorderReady.current = true
+      setScreenRecorderPromptVisible(false)
+      if (step === 1 && screenIntroductionComplete.current) setInteractionEnabled(true)
+    }
+  }
+
+  useEffect(() => {
+    if (telemetryConsent !== 'granted') return
+
+    const captureClick = (event: MouseEvent) => {
+      const target = event.target instanceof Element ? event.target : null
+      const clicked = target?.closest<HTMLElement>('button, a, [role="button"], select, input[type="checkbox"], input[type="radio"]')
+        ?? (target instanceof HTMLElement ? target : null)
+      if (!clicked || clicked.closest('[data-no-telemetry]')) return
+      const label = clicked.getAttribute('aria-label')
+        || clicked.innerText.trim()
+        || clicked.getAttribute('title')
+        || clicked.id
+        || clicked.tagName.toLowerCase()
+      void trackVisitorEvent({
+        eventType: 'click',
+        pageStep: step,
+        target: label.trim().slice(0, 200),
+        details: {
+          element: clicked.tagName.toLowerCase(),
+          id: clicked.id || null,
+          href: clicked instanceof HTMLAnchorElement ? clicked.href : null,
+          x: Math.round(event.clientX),
+          y: Math.round(event.clientY),
+        },
+      })
+    }
+    const captureChange = (event: Event) => {
+      const input = event.target
+      if (!(input instanceof HTMLInputElement || input instanceof HTMLSelectElement || input instanceof HTMLTextAreaElement)) return
+      if (input.closest('[data-no-telemetry]') || input.type === 'password' || input.type === 'file') return
+      if (input instanceof HTMLInputElement && !['checkbox', 'radio'].includes(input.type)) return
+      void trackVisitorEvent({
+        eventType: 'option_selected',
+        pageStep: step,
+        target: input.name || input.id || input.tagName.toLowerCase(),
+        details: { value: input.value, checked: input instanceof HTMLInputElement ? input.checked : null },
+      })
+    }
+    const captureSubmit = (event: Event) => {
+      const form = event.target
+      if (!(form instanceof HTMLFormElement) || form.closest('[data-no-telemetry]')) return
+      const values: Record<string, string | string[]> = {}
+      for (const [key, value] of new FormData(form).entries()) {
+        if (value instanceof File || /password|token|secret/i.test(key)) continue
+        const textValue = String(value).slice(0, 4000)
+        if (key in values) {
+          const previous = values[key]
+          values[key] = Array.isArray(previous) ? [...previous, textValue] : [previous, textValue]
+        } else {
+          values[key] = textValue
+        }
+      }
+      void trackVisitorEvent({
+        eventType: 'form_submitted',
+        pageStep: step,
+        target: form.id || form.getAttribute('aria-label') || 'form',
+        details: { values },
+      })
+    }
+    document.addEventListener('click', captureClick)
+    document.addEventListener('change', captureChange)
+    document.addEventListener('submit', captureSubmit)
+    return () => {
+      document.removeEventListener('click', captureClick)
+      document.removeEventListener('change', captureChange)
+      document.removeEventListener('submit', captureSubmit)
+    }
+  }, [step, telemetryConsent])
+
+  useEffect(() => {
+    if (telemetryConsent !== 'granted') return
+    void trackVisitorEvent({
+      eventType: 'page_view',
+      pageStep: step,
+      target: window.location.pathname,
+      details: { title: document.title },
+    })
+  }, [step, telemetryConsent])
 
   useEffect(
     () => () => {
@@ -199,8 +331,10 @@ function App() {
       if (targetStep === 9) setFinalPromptVisible(true)
       if (targetStep === 1) {
         screenIntroductionComplete.current = true
-        setScreenRecorderPromptVisible(!screenRecorderReady.current)
-        setInteractionEnabled(screenRecorderReady.current)
+        const requiresScreenConsent = telemetryConsent === 'granted' && !screenRecorderReady.current
+        setScreenRecorderPromptVisible(requiresScreenConsent)
+        if (!requiresScreenConsent) screenRecorderReady.current = true
+        setInteractionEnabled(!requiresScreenConsent)
       }
       return
     }
@@ -217,8 +351,10 @@ function App() {
         currentStepAudio.current = null
         if (targetStep === 1) {
           screenIntroductionComplete.current = true
-          setScreenRecorderPromptVisible(!screenRecorderReady.current)
-          setInteractionEnabled(screenRecorderReady.current)
+          const requiresScreenConsent = telemetryConsent === 'granted' && !screenRecorderReady.current
+          setScreenRecorderPromptVisible(requiresScreenConsent)
+          if (!requiresScreenConsent) screenRecorderReady.current = true
+          setInteractionEnabled(!requiresScreenConsent)
         } else {
           setInteractionEnabled(true)
         }
@@ -333,7 +469,7 @@ function App() {
         completeAudio('Voice AI: Lỗi phát giọng')
       }
     }, 500)
-  }, [stopCurrentStepAudio, voiceEnabled])
+  }, [stopCurrentStepAudio, telemetryConsent, voiceEnabled])
 
   useEffect(() => {
     const startTimer = window.setTimeout(() => playStepAudio(step, recipientName), 0)
@@ -515,8 +651,10 @@ function App() {
       stopCurrentStepAudio()
       if (step === 1) {
         screenIntroductionComplete.current = true
-        setScreenRecorderPromptVisible(!screenRecorderReady.current)
-        setInteractionEnabled(screenRecorderReady.current)
+        const requiresScreenConsent = telemetryConsent === 'granted' && !screenRecorderReady.current
+        setScreenRecorderPromptVisible(requiresScreenConsent)
+        if (!requiresScreenConsent) screenRecorderReady.current = true
+        setInteractionEnabled(!requiresScreenConsent)
       } else {
         setInteractionEnabled(true)
       }
@@ -557,6 +695,12 @@ function App() {
       return
     }
 
+    void trackVisitorEvent({
+      eventType: 'recipient_name_submitted',
+      pageStep: step,
+      target: 'recipient-name',
+      details: { name: cleanedName },
+    })
     const normalizedName = cleanedName.toLocaleLowerCase('vi')
     if (normalizedName === 'long' || normalizedName === 'tuấn') {
       setNameError(null)
@@ -691,8 +835,51 @@ function App() {
       </main>
       <ScreenRecorder
         visible={step === 1 && screenRecorderPromptVisible}
+        allowed={telemetryConsent === 'granted'}
         onReady={handleScreenRecorderReady}
       />
+      <button
+        type="button"
+        className="fixed bottom-4 right-4 z-30 rounded-full border border-rose-200 bg-white/90 px-4 py-2 text-xs font-semibold text-rose-700 shadow-lg"
+        onClick={() => setPrivacyDialogOpen(true)}
+      >
+        Quyền riêng tư
+      </button>
+      {privacyDialogOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4">
+          <section
+            className="w-full max-w-xl rounded-3xl bg-white p-6 shadow-2xl sm:p-8"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="privacy-consent-title"
+            data-no-telemetry
+          >
+            <h2 id="privacy-consent-title" className="mb-3 text-xl font-bold text-gray-900 sm:text-2xl">
+              Quyền riêng tư và dữ liệu
+            </h2>
+            <p className="mb-4 text-sm leading-relaxed text-gray-700">
+              Chỉ khi bạn đồng ý, website mới lưu thời điểm, trang và mục tiêu click, lựa chọn, tên người nhận,
+              cùng giá trị form sau khi gửi. Video màn hình/micro chỉ được ghi khi bạn chủ động bấm chia sẻ và cấp
+              quyền trong trình duyệt. Dữ liệu lưu trong PostgreSQL để quản trị viên đã xác thực xem tại /admin,
+              và được giữ đến khi quản trị viên xóa.
+            </p>
+            <p className="mb-6 text-xs leading-relaxed text-gray-500">
+              Mật khẩu không được ghi lại. Form chỉ được lưu khi gửi, không ghi từng phím khi đang gõ. Video không
+              được tạo nếu bạn từ chối chia sẻ; bạn có thể rút lại đồng ý tại mục Quyền riêng tư, nhưng dữ liệu đã
+              lưu chỉ bị xóa khi quản trị viên xóa.
+            </p>
+            <div className="flex flex-col justify-end gap-3 sm:flex-row">
+              <button type="button" className="secondary-button" disabled={consentSaving} onClick={() => void chooseTelemetryConsent('declined')}>
+                Không đồng ý, tiếp tục
+              </button>
+              <button type="button" className="primary-button" disabled={consentSaving} onClick={() => void chooseTelemetryConsent('granted')}>
+                {consentSaving ? 'Đang lưu lựa chọn...' : 'Tôi đồng ý'}
+              </button>
+            </div>
+            {consentError && <p className="mt-4 text-sm text-rose-700" role="alert">{consentError}</p>}
+          </section>
+        </div>
+      )}
       {step === 8 && letterAuthor && !letterPromptDismissed && (
         <div className="letter-prompt-overlay" role="presentation">
           <section

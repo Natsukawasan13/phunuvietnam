@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-ssr
+.git
+.vscode
+*.local
+.env
+.env.*
+!.env.example
+assets/output/*.webm
+!assets/output/.gitkeep

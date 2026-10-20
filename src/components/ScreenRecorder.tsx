@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Mic, ScreenShare, Square, X } from 'lucide-react'
+import { getVisitorSessionId } from '../services/telemetry'
 
 type ScreenRecorderProps = {
   visible: boolean
+  allowed: boolean
   onReady: () => void
 }
 
-function ScreenRecorder({ visible, onReady }: ScreenRecorderProps) {
+function ScreenRecorder({ visible, allowed, onReady }: ScreenRecorderProps) {
   const [isDesktop] = useState(() => window.matchMedia('(min-width: 768px)').matches)
   const [recording, setRecording] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -16,6 +18,7 @@ function ScreenRecorder({ visible, onReady }: ScreenRecorderProps) {
   const captureStreams = useRef<MediaStream[]>([])
   const readyNotified = useRef(false)
   const mounted = useRef(false)
+  const discardRecording = useRef(false)
 
   const notifyReady = useCallback(() => {
     if (readyNotified.current) return
@@ -32,7 +35,18 @@ function ScreenRecorder({ visible, onReady }: ScreenRecorderProps) {
       if (recorder.current?.state === 'recording') recorder.current.stop()
       captureStreams.current.forEach((stream) => stream.getTracks().forEach((track) => track.stop()))
     }
-  }, [isDesktop, notifyReady])
+  }, [allowed, isDesktop, notifyReady])
+
+  useEffect(() => {
+    if (allowed || recorder.current?.state !== 'recording') return
+    discardRecording.current = true
+    recorder.current.stop()
+    captureStreams.current.forEach((stream) => stream.getTracks().forEach((track) => track.stop()))
+    captureStreams.current = []
+    setRecording(false)
+    setSaving(false)
+    setNotice('')
+  }, [allowed])
 
   const downloadRecording = (blob: Blob, filename: string) => {
     const objectUrl = URL.createObjectURL(blob)
@@ -106,6 +120,10 @@ function ScreenRecorder({ visible, onReady }: ScreenRecorderProps) {
         captureStreams.current.forEach((stream) => stream.getTracks().forEach((track) => track.stop()))
         captureStreams.current = []
         recorder.current = null
+        if (discardRecording.current) {
+          discardRecording.current = false
+          return
+        }
 
         if (!recordingBlob.size) {
           if (mounted.current) {
@@ -120,26 +138,29 @@ function ScreenRecorder({ visible, onReady }: ScreenRecorderProps) {
         if (mounted.current) {
           setRecording(false)
           setSaving(true)
-          setNotice('Đang tải video về máy và lưu bản sao vào assets/output...')
+          setNotice('Đang tải video về máy và lưu bản sao trong PostgreSQL...')
         }
 
         void fetch('/api/recordings', {
           method: 'POST',
-          headers: { 'Content-Type': recordingBlob.type },
+          headers: {
+            'Content-Type': recordingBlob.type,
+            'X-Session-Id': getVisitorSessionId(),
+          },
           body: recordingBlob,
         }).then(async (response) => {
           if (!response.ok) throw new Error(`Recording upload failed: ${response.status}`)
           const result: unknown = await response.json()
-          const savedPath = typeof result === 'object' && result !== null && 'path' in result
-            && typeof result.path === 'string' ? result.path : 'assets/output'
+          const recordingId = typeof result === 'object' && result !== null && 'id' in result
+            && (typeof result.id === 'string' || typeof result.id === 'number') ? result.id : null
           if (mounted.current) {
             setSaving(false)
-            setNotice(`Đã tải video về máy và lưu trên máy chủ: ${savedPath}`)
+            setNotice(`Đã tải video về máy và lưu trong PostgreSQL${recordingId ? ` (bản ghi #${recordingId})` : ''}.`)
           }
         }).catch(() => {
           if (mounted.current) {
             setSaving(false)
-            setError('Video đã được tải về máy nhưng không lưu được vào assets/output. Hãy kiểm tra máy chủ ứng dụng.')
+            setError('Video đã tải về máy nhưng không lưu được trong PostgreSQL. Hãy kiểm tra máy chủ ứng dụng.')
           }
         })
       }
@@ -212,13 +233,13 @@ function ScreenRecorder({ visible, onReady }: ScreenRecorderProps) {
         </h2>
         <p id="screen-recorder-description" className="mb-5 text-sm leading-relaxed text-gray-600">
           Nhấn nút để mở hộp thoại chia sẻ của trình duyệt. Chọn màn hình hoặc tab muốn ghi và cho phép dùng micro.
-          Bản ghi sẽ được tải về máy và lưu vào thư mục assets/output trên máy chủ ứng dụng.
+          Bản ghi sẽ được tải về máy và lưu trong PostgreSQL để quản trị viên đã xác thực xem lại.
         </p>
         {!recording ? (
           <button
             type="button"
             className="primary-button w-full"
-            disabled={saving}
+            disabled={saving || !allowed}
             onClick={() => void startRecording()}
           >
             <ScreenShare className="h-4 w-4" aria-hidden="true" />
